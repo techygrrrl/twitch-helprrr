@@ -2,6 +2,7 @@ use twitch_irc::{ClientConfig, SecureTCPTransport, TwitchIRCClient};
 use twitch_irc::login::StaticLoginCredentials;
 use twitch_irc::message::ServerMessage;
 
+/// This is the function that initializes listening to a Twitch channel
 pub async fn initialize_twitch_chat(username: &str) {
     println!("Initialize chat for {:?}", username);
 

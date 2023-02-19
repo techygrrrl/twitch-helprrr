@@ -1,4 +1,4 @@
-mod twitch;
+pub mod twitch;
 
 #[macro_use]
 extern crate rocket;
