@@ -59,4 +59,4 @@ Binstall version 0.10.0:
 
 Run the project:
 
-    PORT=8686 cargo shuttle run
+    PORT=8686 cargo +1.65.0 shuttle run
