@@ -32,6 +32,11 @@
 >
 > -- <cite>esitsu</cite>
 
+> very nice, I don't know what that means, but I'm all in-stall
+>
+> -- <cite>chrissiecodes</cite>
+
+
 ### 🍷 Wine
 
 You will need wine for all of the installs of the binstalls.
