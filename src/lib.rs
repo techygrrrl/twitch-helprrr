@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{sync::Arc};
 
 use axum::{
     extract::{
@@ -11,72 +11,65 @@ use axum::{
 use axum::extract::State;
 use chrono::{DateTime, Utc};
 use futures::{SinkExt, StreamExt};
-use hyper::{Client, Uri};
-use hyper_tls::HttpsConnector;
 use serde::Serialize;
 use shuttle_service::ShuttleAxum;
 use sync_wrapper::SyncWrapper;
 use tokio::{
-    sync::{Mutex, watch},
-    time::sleep,
+    sync::{watch},
 };
+use tokio::sync::broadcast;
+use twitch_irc::message::ServerMessage;
 
 pub mod twitch;
 
 struct AppState {
-    clients_count: usize,
-    rx: watch::Receiver<Message>,
+    // Receiver for websocket messages
+    ws_rx: watch::Receiver<Message>,
+
+    /// Sender for Twitch messages
+    twitch_tx: broadcast::Sender<ServerMessage>,
 }
 
-const PAUSE_SECS: u64 = 15;
-const STATUS_URI: &str = "https://api.shuttle.rs/status";
 
 #[derive(Serialize)]
 struct Response {
-    clients_count: usize,
     datetime: DateTime<Utc>,
-    is_up: bool,
+    data: ServerMessage,
 }
 
 #[shuttle_service::main]
 async fn main() -> ShuttleAxum {
-    let (tx, rx) = watch::channel(Message::Text("{}".to_string()));
+    let (ws_tx, ws_rx) = watch::channel(Message::Text("{}".to_string()));
 
-    let state = Arc::new(Mutex::new(AppState {
-        clients_count: 0,
-        rx,
-    }));
+    let (twitch_tx, _twitch_rx) = broadcast::channel(100);
 
-    // Client implementation of websockets
-
-    // Spawn a thread to continually check the status of the api
-    let state_send = state.clone();
-    tokio::spawn(async move {
-        let duration = Duration::from_secs(PAUSE_SECS);
-
-        let https = HttpsConnector::new();
-
-        let client = Client::builder().build::<_, hyper::Body>(https);
-        let uri: Uri = STATUS_URI.parse().unwrap();
-
-        loop {
-            let is_up = client.get(uri.clone()).await;
-            let is_up = is_up.is_ok();
-
-            let response = Response {
-                clients_count: state_send.lock().await.clients_count,
-                datetime: Utc::now(),
-                is_up,
-            };
-            let msg = serde_json::to_string(&response).unwrap();
-
-            if tx.send(Message::Text(msg)).is_err() {
-                break;
-            }
-
-            sleep(duration).await;
-        }
+    let state = Arc::new(AppState {
+        ws_rx,
+        twitch_tx: twitch_tx.clone(),
     });
+
+
+    twitch::initialize_twitch_chat("techygrrrl").await;
+    // twitch::initialize_twitch_chat("techygrrrl", twitch_tx).await;
+
+
+    // tokio::spawn(async move {
+    //     twitch::initialize_twitch_chat("techygrrrl", twitch_tx).await;
+    // }).await.unwrap();
+
+    // tokio::spawn(async move {
+    //     // loop {
+    //     //     // let is_up = client.get(uri.clone()).await;
+    //     //     let response = Response {
+    //     //         datetime: Utc::now(),
+    //     //     };
+    //     //     let msg = serde_json::to_string(&response).unwrap();
+    //     //     if ws_tx.send(Message::Text(msg)).is_err() {
+    //     //         break;
+    //     //     }
+    //     //     sleep(duration).await;
+    //     // }
+    // });
 
     let router = Router::new()
         .route("/", get(index))
@@ -91,30 +84,50 @@ async fn main() -> ShuttleAxum {
 /// Handler that supports the server web socket implementation
 async fn websocket_handler(
     ws: WebSocketUpgrade,
-    State(state): State<Arc<Mutex<AppState>>>,
+    State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
     ws.on_upgrade(|socket| websocket(socket, state))
 }
 
-async fn websocket(stream: WebSocket, state: Arc<Mutex<AppState>>) {
+/// Web socket server implementation
+async fn websocket(stream: WebSocket, state: Arc<AppState>) {
+
+    let mut twitch_rx = state.twitch_tx.subscribe();
+
+
+    // TODO: twitch thangs
+    // twitch::initialize_twitch_chat("techygrrrl");
+
+    // twitch::initialize_twitch_chat("techygrrrl", (message) -> {
+    //     // do things with the message
+    //     print(message)
+    // });
+
     // By splitting we can send and receive at the same time.
     let (mut sender, mut receiver) = stream.split();
 
-    let mut rx = {
-        let mut state = state.lock().await;
-        state.clients_count += 1;
-        state.rx.clone()
-    };
+    // let mut ws_rx = {
+    //     // TODO: ????
+    //     state.ws_rx.clone()
+    // };
 
     // This task will receive watch messages and forward it to this connected client.
     let mut send_task = tokio::spawn(async move {
-        while let Ok(()) = rx.changed().await {
-            let msg = rx.borrow().clone();
+        while let Ok(server_message) = twitch_rx.recv().await {
+            let server_message = serde_json::to_string(&server_message).unwrap();
 
-            if sender.send(msg).await.is_err() {
+            if sender.send(Message::Text(server_message)).await.is_err() {
                 break;
             }
         }
+        // while let Ok(()) = ws_rx.changed().await {
+        //     let msg = ws_rx.borrow().clone();
+        //
+        //     // TODO: Send ServerMessage from Twitch
+        //     if sender.send(msg).await.is_err() {
+        //         break;
+        //     }
+        // }
     });
 
     // This task will receive messages from this client.
@@ -131,7 +144,7 @@ async fn websocket(stream: WebSocket, state: Arc<Mutex<AppState>>) {
     };
 
     // This client disconnected
-    state.lock().await.clients_count -= 1;
+
 }
 
 /// This is the main page.
